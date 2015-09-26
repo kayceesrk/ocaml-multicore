@@ -198,6 +198,7 @@ static __thread intnat caml_bcodcount;
 #endif
 
 code_t profile_pc = NULL;
+code_t pc;
 
 /* The interpreter itself */
 value caml_interprete(code_t prog, asize_t prog_size)
@@ -207,7 +208,6 @@ value caml_interprete(code_t prog, asize_t prog_size)
   register value * sp SP_REG;
   register value accu ACCU_REG;
 #else
-  register code_t pc;
   register value * sp;
   register value accu;
 #endif

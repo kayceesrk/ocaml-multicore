@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/time.h>
 #include "config.h"
 #ifdef HAS_UNISTD
 #include <unistd.h>
@@ -61,7 +63,8 @@
 #define SEEK_END 2
 #endif
 
-unsigned int *caml_profile_counts = NULL;
+unsigned int *caml_alloc_counts = NULL;
+unsigned int *caml_time_counts = NULL;
 
 /* Read the trailer of a bytecode file */
 
@@ -220,6 +223,16 @@ extern void caml_install_invalid_parameter_handler();
 
 #endif
 
+struct sigaction sa;
+struct itimerval timer;
+extern code_t pc;
+
+static void timer_handler (int signum)
+{
+  if (caml_time_counts && pc && pc - caml_start_code < caml_code_size)
+    caml_time_counts[(long)(pc - caml_start_code)]++;
+}
+
 /* Main entry point when loading code from a file */
 
 CAMLexport void caml_main(char **argv)
@@ -291,11 +304,31 @@ CAMLexport void caml_main(char **argv)
   caml_code_size = caml_seek_section(fd, &trail, "CODE");
   caml_load_code(fd, caml_code_size);
   /* Initialize the profiler */
-  char* prof_file = getenv("CAML_PROFILE_ALLOC");
-  if (prof_file != NULL) {
-    caml_profile_counts =
+  char* prof_alloc_file = getenv("CAML_PROFILE_ALLOC");
+  if (prof_alloc_file != NULL) {
+    caml_alloc_counts =
       (unsigned int *) caml_stat_alloc (caml_code_size * sizeof(unsigned int));
-    for (int i = 0; i < caml_code_size; i++) caml_profile_counts[i] = 0;
+    for (int i = 0; i < caml_code_size; i++) caml_alloc_counts[i] = 0;
+  }
+  char* prof_time_file = getenv("CAML_PROFILE_TIME");
+  if (prof_time_file != NULL) {
+    caml_time_counts =
+      (unsigned int *) caml_stat_alloc (caml_code_size * sizeof(unsigned int));
+    for (int i = 0; i < caml_code_size; i++) caml_time_counts[i] = 0;
+    /* Install timer_handler as the signal handler for SIGPROF. */
+    memset (&sa, 0, sizeof (sa));
+    sa.sa_handler = &timer_handler;
+    sigaction (SIGPROF, &sa, NULL);
+
+    /* Configure the timer to expire after 10 msec... */
+    timer.it_value.tv_sec = 0;
+    timer.it_value.tv_usec = 10000;
+    /* ... and every 10 msec after that. */
+    timer.it_interval.tv_sec = 0;
+    timer.it_interval.tv_usec = 10000;
+    /* Start a profiling timer. It counts down whenever this process is
+      executing. */
+    setitimer (ITIMER_PROF, &timer, NULL);
   }
   /* Build the table of primitives */
   shared_lib_path = read_section(fd, &trail, "DLPT");
@@ -321,11 +354,20 @@ CAMLexport void caml_main(char **argv)
   caml_debugger(PROGRAM_START);
   res = caml_interprete(caml_start_code, caml_code_size);
   /* Output profile */
-  if (prof_file != NULL) {
-    FILE* fp = fopen (prof_file, "w");
+  if (prof_alloc_file != NULL) {
+    FILE* fp = fopen (prof_alloc_file, "w");
     for (int i = 0; i < caml_code_size; i++) {
-      if (caml_profile_counts[i] != 0)
-        fprintf (fp, "%d\t%u\n", i,caml_profile_counts[i]);
+      if (caml_alloc_counts[i] != 0)
+        fprintf (fp, "%d\t%u\n", i,caml_alloc_counts[i]);
+    }
+    fflush(fp);
+    fclose(fp);
+  }
+  if (prof_time_file != NULL) {
+    FILE* fp = fopen (prof_time_file, "w");
+    for (int i = 0; i < caml_code_size; i++) {
+      if (caml_time_counts[i] != 0)
+        fprintf (fp, "%d\t%u\n", i,caml_time_counts[i]);
     }
     fflush(fp);
     fclose(fp);
