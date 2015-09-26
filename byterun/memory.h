@@ -64,8 +64,11 @@ color_t caml_allocation_color (void *hp);
     11: forwarded by a fault promotion */
 
 #define Is_promoted_hd(hd)  (((hd) & (3 << 8)) == (3 << 8))
-#define Promotedhd_hd(hd)  ((hd) | (3 << 8))  
+#define Promotedhd_hd(hd)  ((hd) | (3 << 8))
 
+extern unsigned int* caml_profile_counts;
+extern code_t profile_pc;
+extern code_t caml_start_code;
 
 #ifdef DEBUG
 #define DEBUG_clear(result, wosize) do{ \
@@ -81,6 +84,8 @@ color_t caml_allocation_color (void *hp);
 #define Alloc_small(result, wosize, tag) do{    CAMLassert ((wosize) >= 1); \
                                           CAMLassert ((tag_t) (tag) < 256); \
                                  CAMLassert ((wosize) <= Max_young_wosize); \
+  if (caml_profile_counts && profile_pc)                                    \
+    caml_profile_counts[(long)(profile_pc - caml_start_code)] += wosize;    \
   caml_domain_state->young_ptr -= Bhsize_wosize (wosize);                   \
   if (Caml_check_gc_interrupt()){                                           \
     caml_domain_state->young_ptr += Bhsize_wosize (wosize);                 \
@@ -290,7 +295,7 @@ CAMLextern __thread struct caml__roots_block *caml_local_roots;  /* defined in r
 #define CAMLreturn(result) CAMLreturnT(value, result)
 
 #define CAMLnoreturn ((void) caml__frame)
-  
+
   /* modify a field */
 #define Store_field(block, offset, val) caml_modify_field(block, offset, val)
 

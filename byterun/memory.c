@@ -136,6 +136,9 @@ CAMLexport void caml_blit_fields (value src, int srcoff, value dst, int dstoff, 
 
 CAMLexport value caml_alloc_shr (mlsize_t wosize, tag_t tag)
 {
+  if (caml_profile_counts && profile_pc)
+    caml_profile_counts[(long)(profile_pc - caml_start_code)] += wosize;
+
   value* v = caml_shared_try_alloc(caml_domain_self()->shared_heap, wosize, tag, 0);
   if (v == NULL) {
     caml_raise_out_of_memory ();

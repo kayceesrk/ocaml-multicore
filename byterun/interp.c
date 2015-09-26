@@ -70,9 +70,9 @@ sp is a local copy of the global variable caml_extern_sp. */
 #define Restore_after_gc \
   { sp = caml_extern_sp; accu = sp[0]; env = sp[1]; sp += 2; }
 #define Setup_for_c_call \
-  { saved_pc = pc; *--sp = env; caml_extern_sp = sp; }
+  { saved_pc = pc; profile_pc = pc - 1; *--sp = env; caml_extern_sp = sp; }
 #define Restore_after_c_call \
-  { sp = caml_extern_sp; env = *sp++; saved_pc = NULL; }
+  { sp = caml_extern_sp; env = *sp++; profile_pc = saved_pc = NULL; }
 
 /* Context switch interface */
 #define Setup_for_context_switch \
@@ -196,6 +196,8 @@ sp is a local copy of the global variable caml_extern_sp. */
 #ifdef DEBUG
 static __thread intnat caml_bcodcount;
 #endif
+
+code_t profile_pc = NULL;
 
 /* The interpreter itself */
 value caml_interprete(code_t prog, asize_t prog_size)
@@ -529,6 +531,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
     }
 
     Instruct(GRAB): {
+      profile_pc = pc - 1;
       int required = *pc++;
       if (extra_args >= required) {
         extra_args -= required;
@@ -549,6 +552,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
     }
 
     Instruct(CLOSURE): {
+      profile_pc = pc - 1;
       int nvars = *pc++;
       int i;
       if (nvars > 0) *--sp = accu;
@@ -573,6 +577,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
     }
 
     Instruct(CLOSUREREC): {
+      profile_pc = pc - 1;
       int nfuncs = *pc++;
       int nvars = *pc++;
       int i, field;
@@ -671,6 +676,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
       accu = Atom(*pc++); Next;
 
     Instruct(MAKEBLOCK): {
+      profile_pc = pc - 1;
       mlsize_t wosize = *pc++;
       tag_t tag = *pc++;
       mlsize_t i;
@@ -690,6 +696,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
       Next;
     }
     Instruct(MAKEBLOCK1): {
+      profile_pc = pc - 1;
       tag_t tag = *pc++;
       value block;
       Alloc_small(block, 1, tag);
@@ -698,6 +705,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
       Next;
     }
     Instruct(MAKEBLOCK2): {
+      profile_pc = pc - 1;
       tag_t tag = *pc++;
       value block;
       Alloc_small(block, 2, tag);
@@ -708,6 +716,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
       Next;
     }
     Instruct(MAKEBLOCK3): {
+      profile_pc = pc - 1;
       tag_t tag = *pc++;
       value block;
       Alloc_small(block, 3, tag);
@@ -719,6 +728,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
       Next;
     }
     Instruct(MAKEFLOATBLOCK): {
+      profile_pc = pc - 1;
       mlsize_t size = *pc++;
       mlsize_t i;
       value block;
@@ -761,6 +771,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
     Instruct(GETMUTABLEFIELD):
       accu = Field(accu, *pc); pc++; Next;
     Instruct(GETFLOATFIELD): {
+      profile_pc = pc - 1;
       double d = Double_field(accu, *pc);
       Alloc_small(accu, Double_wosize, Double_tag);
       Store_double_val(accu, d);

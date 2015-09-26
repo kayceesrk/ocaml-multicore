@@ -379,6 +379,7 @@ void caml_empty_minor_heap (void)
   unsigned rewritten = 0;
   struct caml_ref_entry *r;
 
+  profile_pc = NULL;
   caml_save_stack_gc();
 
   stat_live_bytes = 0;
