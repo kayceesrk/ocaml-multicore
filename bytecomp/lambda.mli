@@ -52,6 +52,10 @@ type primitive =
   | Preperform
   (* External call *)
   | Pccall of Primitive.description
+  (* TM *)
+  | Pxbegin
+  | Pxend
+  | Pxabort
   (* Exceptions *)
   | Praise of raise_kind
   (* Boolean operations *)

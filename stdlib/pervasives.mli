@@ -43,6 +43,12 @@ exception Exit
 (** The [Exit] exception is not raised by any library function.  It is
     provided for use in your programs. *)
 
+(** {6 Transactional Memory} *)
+
+exception Aborted of int
+val xbegin : unit -> unit
+external xend : unit -> unit = "%xend"
+external xabort : int -> unit = "%xabort"
 
 (** {6 Effects} *)
 
