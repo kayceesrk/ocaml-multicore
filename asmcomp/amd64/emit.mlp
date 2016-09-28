@@ -610,16 +610,19 @@ let emit_instr fallthrough i =
         `	cmp	$0xffffffff, %eax\n`;
         `	je	{emit_label txn_begin}\n`;
         (* Abort *)
-        `	salq	%rax\n`;
-        `	addq	$1,%rax\n`;
-        `	call	*(%rdx)\n`;
-        record_frame i.live i.dbg;
+        `	movq	%rdx, %rax\n`;
+        `	movq	%r15, %rsp\n`;
+        `	{locate_domain_state ()}, %rsp\n`;
+        `	movq	{domain_field Domainstate.Domain_stack_high}(%rsp), %rsp\n`;
+        `	subq	%r14, %rsp\n`;
+        `	popq	%r14\n`;
+        `	ret\n`;
         (* XBEGIN_SUCCESS *)
         `{emit_label txn_begin}:\n`;
     | Lop(Ispecific Ixend) ->
         `	xend\n`
-    | Lop(Ispecific (Ixabort i)) ->
-        `	xabort	${emit_int i}\n`
+    | Lop(Ispecific Ixabort) ->
+        `	xabort	$0\n`
     | Lreloadretaddr ->
         ()
     | Lreturn ->

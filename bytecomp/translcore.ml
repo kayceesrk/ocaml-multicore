@@ -724,13 +724,7 @@ and transl_exp0 e =
         | (Ploc _, _) -> assert false
         | (_, _) ->
             begin match (prim, argl) with
-            | (Pxabort, [Lconst (Const_base (Const_int i))]) ->
-                if i < 0 || i >= 128 then
-                  raise(Error(e.exp_loc, Illegal_xabort))
-                else wrap0 (Lprim(prim, argl))
-            | (Pxabort, _) ->
-                raise(Error(e.exp_loc, Illegal_xabort))
-            | (Plazyforce, [a]) ->
+              (Plazyforce, [a]) ->
                 wrap (Matching.inline_lazy_force a e.exp_loc)
             | (Plazyforce, _) -> assert false
             |_ -> let p = Lprim(prim, argl) in

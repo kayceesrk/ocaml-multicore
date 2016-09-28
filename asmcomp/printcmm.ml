@@ -85,7 +85,7 @@ let operation = function
   | Craise (k, d) -> Lambda.raise_kind k ^ Debuginfo.to_string d
   | Cxbegin -> "xbegin"
   | Cxend -> "xend"
-  | Cxabort i -> Printf.sprintf "xabort %d" i
+  | Cxabort -> Printf.sprintf "xabort"
   | Ccheckbound d -> "checkbound" ^ Debuginfo.to_string d
 
 let rec expr ppf = function

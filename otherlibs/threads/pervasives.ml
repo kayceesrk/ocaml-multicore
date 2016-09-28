@@ -584,20 +584,12 @@ let (^^) (Format (fmt1, str1)) (Format (fmt2, str2)) =
 
 (* TM *)
 
-external xbegin : (int -> exn) -> unit = "%xbegin"
-exception Aborted of int
-let fallback x = raise (Aborted x)
+external xbegin : exn -> unit = "%xbegin"
+exception Aborted
+(* let xbegin () = xbegin Aborted *)
 
 external xend : unit -> unit = "%xend"
 external xabort : int -> 'a = "%xabort"
-
-let atomically opt pes =
-  try
-    xbegin fallback;
-    let res = opt () in
-    xend ();
-    res
-  with Aborted s -> pes s
 
 (* Miscellaneous *)
 

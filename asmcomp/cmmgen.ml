@@ -1600,11 +1600,7 @@ and transl_prim_1 p arg dbg =
      Cop(Cadda, [transl arg; Cconst_int (-1)])
   | Pxbegin -> return_unit @@ Cop(Cxbegin, [transl arg])
   | Pxend -> return_unit @@ Cop(Cxend, [])
-  | Pxabort ->
-      begin match transl arg with
-      | Cconst_int i -> return_unit @@ Cop(Cxabort i, [])
-      | _ -> assert false
-      end
+  | Pxabort -> return_unit @@ Cop(Cxabort, [])
   (* Exceptions *)
   | Praise k ->
       Cop(Craise (k, dbg), [transl arg])

@@ -217,7 +217,7 @@ method! select_operation op args =
       (Iintop Imulh, args)
   | Cxbegin -> (Ispecific Ixbegin, args)
   | Cxend -> (Ispecific Ixend, args)
-  | Cxabort i -> (Ispecific (Ixabort i), args)
+  | Cxabort -> (Ispecific Ixabort, args)
   | _ -> super#select_operation op args
 
 (* Recognize float arithmetic with mem *)
