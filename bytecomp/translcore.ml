@@ -149,6 +149,7 @@ let primitives_table = create_hashtable 57 [
   "%raise", Praise Raise_regular;
   "%reraise", Praise Raise_reraise;
   "%raise_notrace", Praise Raise_notrace;
+  "%perform", Pperform;
   "%sequand", Psequand;
   "%sequor", Psequor;
   "%boolnot", Pnot;
@@ -331,8 +332,7 @@ let find_primitive loc prim_name =
     | "%loc_LINE" -> Ploc Loc_LINE
     | "%loc_POS" -> Ploc Loc_POS
     | "%loc_MODULE" -> Ploc Loc_MODULE
-    | "%perform" -> Pperform loc 
-    | "%resume"-> Presume loc
+    | "%resume" -> Presume loc
     | name -> Hashtbl.find primitives_table name
 
 let transl_prim loc prim args =
@@ -712,6 +712,9 @@ and transl_exp0 e =
                   k
             in
             wrap0 (Lprim(Praise k, [event_after arg1 targ]))
+        | (Pperform, [arg1]) ->
+            let targ = List.hd argl in
+            wrap0 (Lprim(Pperform, [event_after arg1 targ]))
         | (Ploc kind, []) ->
           lam_of_loc kind e.exp_loc
         | (Ploc kind, [arg1]) ->
@@ -1228,8 +1231,11 @@ and transl_handler e body val_caselist exn_caselist eff_caselist =
        (Lfunction (Curried, [param], body), 
         Lconst(Const_base(Const_int 0)))
   in
+  let lam = 
     Lprim(Presume e.exp_loc, [Lprim(prim_alloc_stack, [val_fun; exn_fun; eff_fun]);
                               body_fun; arg])
+  in
+  event_after e lam
 
 (* Wrapper for class compilation *)
 

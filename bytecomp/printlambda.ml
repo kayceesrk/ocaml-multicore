@@ -124,7 +124,7 @@ let primitive ppf = function
   | Psetfloatfield n -> fprintf ppf "setfloatfield %i" n
   | Pduprecord (rep, size) -> fprintf ppf "duprecord %a %i" record_rep rep size
   | Plazyforce -> fprintf ppf "force"
-  | Pperform _ -> fprintf ppf "perform"
+  | Pperform -> fprintf ppf "perform"
   | Presume _ -> fprintf ppf "resume"
   | Preperform -> fprintf ppf "reperform"
   | Pccall p -> fprintf ppf "%s" p.prim_name

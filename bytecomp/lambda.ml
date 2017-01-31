@@ -47,7 +47,7 @@ type primitive =
   (* Force lazy values *)
   | Plazyforce
   (* Context switches *)
-  | Pperform of Location.t
+  | Pperform 
   | Presume of Location.t
   | Preperform
   (* External call *)
