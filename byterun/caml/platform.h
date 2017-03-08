@@ -65,7 +65,21 @@ INLINE void atomic_store_rel(atomic_uintnat* p, uintnat v) {
 }
 
 #else
-#error "unsupported platform (i.e. not x86)"
+INLINE void cpu_relax() { }
+
+#define ATOMIC_UINTNAT_INIT(x) { (x) }
+
+/* On x86, all loads are acquire and all stores are release. So, only
+   compiler barriers are necessary in the following. */
+
+INLINE uintnat atomic_load_acq(atomic_uintnat* p) {
+  uintnat v = p->val;
+  return v;
+}
+
+INLINE void atomic_store_rel(atomic_uintnat* p, uintnat v) {
+  p->val = v;
+}
 #endif
 
 

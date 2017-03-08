@@ -14,7 +14,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-#include <execinfo.h>
 #include <stdlib.h>
 
 #include "caml/config.h"
