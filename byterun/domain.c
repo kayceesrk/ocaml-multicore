@@ -60,6 +60,13 @@ static struct dom_internal all_domains[Max_domains];
 static uintnat minor_heaps_base;
 static __thread dom_internal* domain_self;
 
+/* double-buffered sampled GC stats.
+   At the end of GC cycle N, domains update sampled_gc_stats[N&1],
+   but requests to Gc.stats() read from sampled_gc_stats[!(N&1)].
+   That way, Gc.stats() returns the statistics atomically sampled
+   at the end of the most recently completed GC cycle */
+static struct gc_stats sampled_gc_stats[2][Max_domains];
+
 #ifdef __APPLE__
   /* OSX has issues with dynamic loading + exported TLS.
      This is slower but works */
@@ -67,19 +74,6 @@ static __thread dom_internal* domain_self;
 #else
   CAMLexport __thread struct caml_domain_state* caml_domain_state;
 #endif
-
-/* Statically assert that each field of domain_state is one word long and at the right index */
-#define DOMAIN_STATE(idx, type, name) \
-    CAML_STATIC_ASSERT(sizeof(((struct caml_domain_state*)0)->name) == sizeof(void*) && \
-                     offsetof(struct caml_domain_state, name) == idx * sizeof(void*));
-#include "caml/domain_state.tbl"
-#undef DOMAIN_STATE
-#ifndef NATIVE_CODE
-  #define BYTE_DOMAIN_STATE(type, name) \
-      CAML_STATIC_ASSERT(sizeof(((struct caml_domain_state*)0)->name) == sizeof(void*));
-  #include "caml/byte_domain_state.tbl"
-  #undef BYTE_DOMAIN_STATE
-#endif // BYTECODE
 
 static __thread char domains_locked[Max_domains];
 
@@ -479,6 +473,12 @@ CAMLexport void caml_enter_blocking_section() {
   caml_plat_unlock(&domain_self->roots_lock);
 }
 
+#ifdef CAML_VERIFY_HEAP
+static caml_plat_mutex verify_lock = CAML_PLAT_MUTEX_INITIALIZER;
+static caml_plat_cond verify_cond = CAML_PLAT_COND_INITIALIZER(&verify_lock);
+static unsigned int verify_gen = 0;
+static int verify_heaps = 0;
+#endif
 
 static atomic_uintnat heaps_marked;
 static atomic_uintnat domain_accounted_for[Max_domains];
@@ -489,16 +489,18 @@ extern void caml_finish_marking_domain (struct domain*);
 static void stw_phase () {
   int i;
   int my_heaps = 0;
+  int stats_phase = CAML_DOMAIN_STATE->stat_major_collections & 1;
   char inactive_domains_locked[Max_domains] = {0};
 
   /* First, make sure all domains are accounted for. */
   for (i = 0; i < Max_domains; i++) {
     dom_internal* d = &all_domains[i];
+    int mine = 0;
     SPIN_WAIT {
       if (atomic_load_acq(&domain_accounted_for[i]))
         break;
       /* not accounted for yet */
-      int mine = (d == domain_self) || domain_is_locked(d);
+      mine = (d == domain_self) || domain_is_locked(d);
       if (!mine && try_lock_domain(d)) {
         /* mine now! */
         inactive_domains_locked[i] = 1;
@@ -512,6 +514,19 @@ static void stw_phase () {
         /* locked by some other thread,
            but not yet accounted for, need to wait */
         check_rpc();
+      }
+    }
+    if (mine) {
+      struct domain* dom = &all_domains[i].state;
+      struct gc_stats* stats = &sampled_gc_stats[stats_phase][i];
+      if (dom->state) {
+        stats->minor_words = dom->state->stat_minor_words;
+        stats->promoted_words = dom->state->stat_promoted_words;
+        stats->major_words = dom->state->stat_major_words;
+        stats->minor_collections = dom->state->stat_minor_collections;
+        caml_sample_heap_stats(dom->shared_heap, &stats->major_heap);
+      } else {
+        memset(stats, 0, sizeof(*stats));
       }
     }
   }
@@ -568,16 +583,72 @@ static void stw_phase () {
     caml_gc_log("GC cycle completed");
   }
 
+  /* If the heap is to be verified, do it before the domains continue
+     running OCaml code. */
+#ifdef CAML_VERIFY_HEAP
+  for (i = 0; i < Max_domains; i++) {
+    dom_internal* d = &all_domains[i];
+    if (d == domain_self || domain_is_locked(d)) {
+      if (d->state.state)
+        caml_do_local_roots(&caml_verify_root, &d->state);
+    }
+  }
+  caml_scan_global_roots(&caml_verify_root);
+  caml_verify_heap();
+  caml_plat_lock(&verify_lock);
+  unsigned gen = verify_gen;
+  caml_gc_log("Heap verified after cycle %u", gen);
+  verify_heaps += my_heaps;
+  Assert (verify_heaps <= Max_domains);
+  if (verify_heaps == Max_domains) {
+    verify_heaps = 0;
+    verify_gen++;
+    caml_plat_signal(&verify_cond);
+  } else {
+    while (verify_gen == gen)
+      caml_plat_wait(&verify_cond);
+  }
+  caml_plat_unlock(&verify_lock);
+#endif
+
+
   /* Finally, start the next sweeping cycle and
      unlock any inactive domains we locked for GC */
 
   for (i = 0; i < Max_domains; i++) {
     dom_internal* d = &all_domains[i];
-    if ((d == domain_self || domain_is_locked(d)) && d->state.shared_heap)
+    if ((d == domain_self || domain_is_locked(d)) && d->state.shared_heap) {
       caml_cycle_heap(d->state.shared_heap);
+      d->state.state->stat_major_collections++;
+    }
 
     if (inactive_domains_locked[i])
       unlock_domain(d);
+  }
+}
+
+void caml_sample_gc_stats(struct gc_stats* buf)
+{
+  memset(buf, 0, sizeof(*buf));
+  /* we read from the buffers that are not currently being
+     written to. that way, we pick up the numbers written
+     at the end of the most recently completed GC cycle */
+  int phase = ! (CAML_DOMAIN_STATE->stat_major_collections & 1);
+  int i;
+  for (i=0; i<Max_domains; i++) {
+    struct gc_stats* s = &sampled_gc_stats[phase][i];
+    struct heap_stats* h = &s->major_heap;
+    buf->minor_words += s->minor_words;
+    buf->promoted_words += s->promoted_words;
+    buf->major_words += s->major_words;
+    buf->minor_collections += s->minor_collections;
+    buf->major_heap.pool_words += h->pool_words;
+    buf->major_heap.pool_max_words += h->pool_max_words;
+    buf->major_heap.pool_live_words += h->pool_live_words;
+    buf->major_heap.pool_live_blocks += h->pool_live_blocks;
+    buf->major_heap.pool_frag_words += h->pool_frag_words;
+    buf->major_heap.large_words += h->large_words;
+    buf->major_heap.large_max_words += h->large_max_words;
   }
 }
 

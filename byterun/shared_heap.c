@@ -43,18 +43,15 @@ typedef struct pool {
   struct domain* owner;
   sizeclass sz;
 } pool;
+CAML_STATIC_ASSERT(sizeof(pool) == Bsize_wsize(POOL_HEADER_WSIZE));
+#define POOL_HEADER_SZ sizeof(pool)
 
 typedef struct large_alloc {
   struct domain* owner;
   struct large_alloc* next;
 } large_alloc;
-
-
-#define ALIGN_SIZEOF_VALUE(n) (((n + sizeof(value) - 1) / sizeof(value)) * sizeof(value))
-
-/* sizeof(pool) rounded up to sizeof(value) */
-#define POOL_HEADER_SZ ALIGN_SIZEOF_VALUE(sizeof(pool))
-#define LARGE_ALLOC_HEADER_SZ ALIGN_SIZEOF_VALUE(sizeof(large_alloc))
+CAML_STATIC_ASSERT(sizeof(large_alloc) % sizeof(value) == 0);
+#define LARGE_ALLOC_HEADER_SZ sizeof(large_alloc)
 
 struct {
   caml_plat_mutex lock;
@@ -82,7 +79,7 @@ struct caml_heap_state {
 
   struct domain* owner;
 
-  uintnat pools_allocated, large_bytes_allocated;
+  struct heap_stats stats;
 };
 
 struct caml_heap_state* caml_init_shared_heap() {
@@ -100,9 +97,14 @@ struct caml_heap_state* caml_init_shared_heap() {
   heap->swept_large = 0;
   heap->unswept_large = 0;
   heap->owner = caml_domain_self();
-  heap->pools_allocated = 0;
-  heap->large_bytes_allocated = 0;
+  memset(&heap->stats, 0, sizeof(heap->stats));
   return heap;
+}
+
+
+void caml_sample_heap_stats(struct caml_heap_state* local, struct heap_stats* h)
+{
+  *h = local->stats;
 }
 
 
@@ -138,24 +140,27 @@ static pool* pool_acquire(struct caml_heap_state* local) {
     if (r)
       pool_freelist.free = r->next;
     caml_plat_unlock(&pool_freelist.lock);
-    local->pools_allocated++;
   }
-  Assert (r->owner == 0);
+  if (r) Assert (r->owner == 0);
   return r;
 }
 
-static void pool_release(struct caml_heap_state* local, pool* pool) {
+static void pool_release(struct caml_heap_state* local, pool* pool, sizeclass sz) {
   pool->owner = 0;
+  Assert(pool->sz == sz);
+  local->stats.pool_words -= POOL_WSIZE;
+  local->stats.pool_frag_words -= POOL_HEADER_WSIZE + wastage_sizeclass[sz];
   if (local->num_free_pools < MAX_LOCAL_FREE_POOLS) {
+    /* FIXME: in the local cache, other domains can't get it */
     local->num_free_pools++;
     pool->next = local->free_pools;
     local->free_pools = pool;
   } else {
+    /* FIXME: give free pools back to the OS */
     caml_plat_lock(&pool_freelist.lock);
     pool->next = pool_freelist.free;
     pool_freelist.free = pool;
     caml_plat_unlock(&pool_freelist.lock);
-    local->pools_allocated--;
   }
 }
 
@@ -180,6 +185,11 @@ static pool* pool_find(struct caml_heap_state* local, sizeclass sz) {
   /* Failing that, we need to allocate a new pool */
   r = pool_acquire(local);
   if (!r) return 0; /* if we can't allocate, give up */
+
+  local->stats.pool_words += POOL_WSIZE;
+  if (local->stats.pool_words > local->stats.pool_max_words)
+    local->stats.pool_max_words = local->stats.pool_words;
+  local->stats.pool_frag_words += POOL_HEADER_WSIZE + wastage_sizeclass[sz];
 
   /* Having allocated a new pool, set it up for size sz */
   local->avail_pools[sz] = r;
@@ -223,10 +233,13 @@ static void* pool_allocate(struct caml_heap_state* local, sizeclass sz) {
 static void* large_allocate(struct caml_heap_state* local, mlsize_t sz) {
   large_alloc* a = malloc(sz + LARGE_ALLOC_HEADER_SZ);
   if (!a) caml_raise_out_of_memory();
+  local->stats.large_words += Wsize_bsize(sz + LARGE_ALLOC_HEADER_SZ);
+  if (local->stats.large_words > local->stats.large_max_words)
+    local->stats.large_max_words = local->stats.large_words;
+  local->stats.large_blocks++;
   a->owner = local->owner;
   a->next = local->swept_large;
   local->swept_large = a;
-  local->large_bytes_allocated += sz;
   return (char*)a + LARGE_ALLOC_HEADER_SZ;
 }
 
@@ -236,11 +249,18 @@ value* caml_shared_try_alloc(struct caml_heap_state* local, mlsize_t wosize, tag
   Assert (wosize > 0);
   Assert (tag != Infix_tag);
   if (whsize <= SIZECLASS_MAX) {
-    p = pool_allocate(local, sizeclass_wsize[whsize]);
+    sizeclass sz = sizeclass_wsize[whsize];
+    Assert(wsize_sizeclass[sz] >= whsize);
+    p = pool_allocate(local, sz);
+    if (!p) return 0;
+    struct heap_stats* s = &local->stats;
+    s->pool_live_blocks++;
+    s->pool_live_words += whsize;
+    s->pool_frag_words += wsize_sizeclass[sz] - whsize;
   } else {
     p = large_allocate(local, Bsize_wsize(whsize));
+    if (!p) return 0;
   }
-  if (!p) return 0;
   Hd_hp (p) = Make_header(wosize, tag, pinned ? NOT_MARKABLE : global.UNMARKED);
 #ifdef DEBUG
   {
@@ -275,6 +295,7 @@ static intnat pool_sweep(struct caml_heap_state* local, pool** plist, sizeclass 
   value* end = (value*)a + POOL_WSIZE;
   mlsize_t wh = wsize_sizeclass[sz];
   int all_free = 1, all_used = 1;
+  struct heap_stats* s = &local->stats;
 
   while (p + wh <= end) {
     header_t hd = (header_t)*p;
@@ -282,12 +303,17 @@ static intnat pool_sweep(struct caml_heap_state* local, pool** plist, sizeclass 
       /* already on freelist */
       all_used = 0;
     } else if (Has_status_hd(hd, global.GARBAGE)) {
+      Assert(Whsize_hd(hd) <= wh);
       /* add to freelist */
       p[0] = 0;
       p[1] = (value)a->next_obj;
       Assert(Is_block((value)p));
       a->next_obj = p;
       all_used = 0;
+      /* update stats */
+      s->pool_live_blocks--;
+      s->pool_live_words -= Whsize_hd(hd);
+      s->pool_frag_words -= (wh - Whsize_hd(hd));
     } else {
       /* still live */
       all_free = 0;
@@ -296,7 +322,7 @@ static intnat pool_sweep(struct caml_heap_state* local, pool** plist, sizeclass 
   }
 
   if (all_free) {
-    pool_release(local, a);
+    pool_release(local, a, sz);
   } else {
     pool** list = all_used ? &local->full_pools[sz] : &local->avail_pools[sz];
     a->next = *list;
@@ -312,7 +338,9 @@ static intnat large_alloc_sweep(struct caml_heap_state* local) {
   local->unswept_large = a->next;
   header_t hd = *(header_t*)((char*)a + LARGE_ALLOC_HEADER_SZ);
   if (Has_status_hd(hd, global.GARBAGE)) {
-    local->large_bytes_allocated -= Bhsize_hd(hd);
+    local->stats.large_words -=
+      Whsize_hd(hd) + Wsize_bsize(LARGE_ALLOC_HEADER_SZ);
+    local->stats.large_blocks--;
     free(a);
   } else {
     a->next = local->swept_large;
@@ -321,7 +349,10 @@ static intnat large_alloc_sweep(struct caml_heap_state* local) {
   return Whsize_hd(hd);
 }
 
+#ifdef CAML_VERIFY_HEAP
 static void verify_swept(struct caml_heap_state*);
+#endif
+
 intnat caml_sweep(struct caml_heap_state* local, intnat work) {
   /* Sweep local pools */
   while (work > 0 && local->next_to_sweep < NUM_SIZECLASSES) {
@@ -341,7 +372,7 @@ intnat caml_sweep(struct caml_heap_state* local, intnat work) {
     work -= large_alloc_sweep(local);
   }
 
-#ifdef DEBUG
+#ifdef CAML_VERIFY_HEAP
   if (work > 0) {
     /* sweeping is complete, check everything worked */
     verify_swept(local);
@@ -351,9 +382,7 @@ intnat caml_sweep(struct caml_heap_state* local, intnat work) {
 }
 
 uintnat caml_heap_size(struct caml_heap_state* local) {
-  return
-    local->pools_allocated * Bsize_wsize(POOL_WSIZE) +
-    local->large_bytes_allocated;
+  return Bsize_wsize(local->stats.pool_words + local->stats.large_words);
 }
 
 int caml_mark_object(value p) {
@@ -429,6 +458,15 @@ void caml_init_major_heap (asize_t size) {
 }
 
 
+#ifdef CAML_VERIFY_HEAP
+
+/* Verify heap invariants.
+
+   Verification happens just after the heap is cycled during STW, so
+   everything should be unmarked. If something reachable marked after
+   cycling the heap, it means that garbage was reachable beforehand.
+*/
+
 static __thread value* verify_stack;
 static __thread int verify_stack_len;
 static __thread int verify_sp;
@@ -445,6 +483,11 @@ static void verify_push(value v, value* p) {
          sizeof(value*) * verify_stack_len);
   }
   verify_stack[verify_sp++] = v;
+}
+
+void caml_verify_root(value v, value* p)
+{
+  verify_push(v, p);
 }
 
 static void verify_object(value v) {
@@ -465,7 +508,7 @@ static void verify_object(value v) {
 
   // caml_gc_log ("verify_object: v=0x%lx hd=0x%lx tag=%u", v, Hd_val(v), Tag_val(v));
   if (!Is_minor(v)) {
-    Assert(Has_status_hd(Hd_val(v), global.MARKED));
+    Assert(Has_status_hd(Hd_val(v), global.UNMARKED));
   }
 
   if (Tag_val(v) == Stack_tag) {
@@ -483,15 +526,9 @@ static void verify_object(value v) {
   }
 }
 
-static void verify_heap() {
+void caml_verify_heap() {
   caml_save_stack_gc();
-  // caml_gc_log("verify_heap: caml_do_local_roots");
-  caml_do_local_roots(&verify_push, caml_domain_self());
-  // caml_gc_log("verify_heap: caml_scan_global_roots");
-  caml_scan_global_roots(&verify_push);
-  // caml_gc_log("verify_heap: verify_stack");
   while (verify_sp) verify_object(verify_stack[--verify_sp]);
-  // caml_gc_log("Verify: %lu objs", verify_objs);
 
   caml_addrmap_clear(&verify_seen);
   verify_objs = 0;
@@ -502,10 +539,15 @@ static void verify_heap() {
   caml_restore_stack_gc();
 }
 
+
 struct mem_stats {
+  /* unit is words */
   uintnat alloced;
+  uintnat live;
   uintnat free;
   uintnat overhead;
+
+  uintnat live_blocks;
 };
 
 static void verify_pool(pool* a, sizeclass sz, struct mem_stats* s) {
@@ -517,17 +559,21 @@ static void verify_pool(pool* a, sizeclass sz, struct mem_stats* s) {
   value* p = (value*)((char*)a + POOL_HEADER_SZ);
   value* end = (value*)a + POOL_WSIZE;
   mlsize_t wh = wsize_sizeclass[sz];
+  s->overhead += Wsize_bsize(POOL_HEADER_SZ);
 
   while (p + wh <= end) {
     header_t hd = (header_t)*p;
     Assert(hd == 0 || !Has_status_hd(hd, global.GARBAGE));
     if (hd) {
+      s->live += Whsize_hd(hd);
       s->overhead += wh - Whsize_hd(hd);
+      s->live_blocks++;
     } else {
       s->free += wh;
     }
     p += wh;
   }
+  Assert(end - p == wastage_sizeclass[sz]);
   s->overhead += end - p;
   s->alloced += POOL_WSIZE;
 }
@@ -538,6 +584,7 @@ static void verify_large(large_alloc* a, struct mem_stats* s) {
     Assert (!Has_status_hd(hd, global.GARBAGE));
     s->alloced += Wsize_bsize(LARGE_ALLOC_HEADER_SZ) + Whsize_hd(hd);
     s->overhead += Wsize_bsize(LARGE_ALLOC_HEADER_SZ);
+    s->live_blocks++;
   }
 }
 
@@ -560,19 +607,28 @@ static void verify_swept (struct caml_heap_state* local) {
   caml_gc_log("Pooled memory: %lu alloced, %lu free, %lu fragmentation",
               pool_stats.alloced, pool_stats.free, pool_stats.overhead);
 
-  Assert(local->unswept_large == 0);
   verify_large(local->swept_large, &large_stats);
-
+  Assert(local->unswept_large == 0);
   caml_gc_log("Large memory: %lu alloced, %lu free, %lu fragmentation",
               large_stats.alloced, large_stats.free, large_stats.overhead);
+
+  /* Check stats are being computed correctly */
+  Assert(local->stats.pool_words == pool_stats.alloced);
+  Assert(local->stats.pool_live_words == pool_stats.live);
+  Assert(local->stats.pool_live_blocks == pool_stats.live_blocks);
+  Assert(local->stats.pool_frag_words == pool_stats.overhead);
+  Assert(local->stats.pool_words -
+         (local->stats.pool_live_words + local->stats.pool_frag_words) 
+         == pool_stats.free);
+  Assert(local->stats.large_words == large_stats.alloced);
+  Assert(local->stats.large_blocks == large_stats.live_blocks);
 }
+
+#endif /* CAML_VERIFY_HEAP */
 
 void caml_cycle_heap_stw() {
   struct global_heap_state oldg = global;
   struct global_heap_state newg;
-#ifdef DEBUG
-  verify_heap();
-#endif
   newg.UNMARKED     = oldg.MARKED;
   newg.GARBAGE      = oldg.UNMARKED;
   newg.MARKED       = oldg.GARBAGE; /* should be empty because garbage was swept */

@@ -1,7 +1,10 @@
 #ifndef CAML_SHARED_HEAP_H
 #define CAML_SHARED_HEAP_H
 
+#include "config.h"
 #include "roots.h"
+#include "domain.h"
+#include "misc.h"
 
 struct caml_heap_state;
 struct pool;
@@ -9,6 +12,8 @@ struct pool;
 struct caml_heap_state* caml_init_shared_heap();
 
 value* caml_shared_try_alloc(struct caml_heap_state*, mlsize_t wosize, tag_t tag, int is_pinned);
+
+void caml_sample_heap_stats(struct caml_heap_state*, struct heap_stats*);
 
 uintnat caml_heap_size(struct caml_heap_state*);
 
@@ -31,8 +36,13 @@ void caml_cycle_heap_stw(void);
    (after caml_cycle_heap_stw) */
 void caml_cycle_heap(struct caml_heap_state*);
 
-#ifdef DEBUG
+#ifdef CAML_VERIFY_HEAP
+/* must only be called while all domains are paused */
+void caml_verify_root(value, value*);
+void caml_verify_heap(void);
+#endif
 
+#ifdef DEBUG
 /* [is_garbage(v)] returns true if [v] is a garbage value */
 int is_garbage (value);
 
