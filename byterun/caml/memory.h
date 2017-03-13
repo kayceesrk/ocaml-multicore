@@ -43,6 +43,7 @@ CAMLextern void caml_alloc_dependent_memory (mlsize_t);
 CAMLextern void caml_free_dependent_memory (mlsize_t);
 CAMLextern void caml_modify_field (value, int, value);
 CAMLextern int caml_atomic_cas_field (value, int, value, value);
+CAMLexport value caml_atomic_cas_field_val (value, int, value, value);
 CAMLextern value caml_read_barrier (value, int);
 CAMLextern void caml_initialize_field (value, int, value);
 CAMLextern void caml_blit_fields (value src, int srcoff, value dst, int dstoff, int n);

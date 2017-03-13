@@ -30,6 +30,8 @@ external field : t -> int -> t = "%obj_field"
 external set_field : t -> int -> t -> unit = "%obj_set_field"
 external compare_and_swap_field : t -> int -> t -> t -> bool
   = "caml_obj_compare_and_swap"
+external compare_and_swap_field_val : t -> int -> t -> t -> t
+  = "caml_obj_compare_and_swap_val"
 val double_field : t -> int -> float  (* @since 3.11.2 *)
 val set_double_field : t -> int -> float -> unit  (* @since 3.11.2 *)
 external is_shared : t -> bool = "caml_obj_is_shared"

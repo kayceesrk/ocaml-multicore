@@ -27,6 +27,8 @@ external field : t -> int -> t = "%obj_field"
 external set_field : t -> int -> t -> unit = "%obj_set_field"
 external compare_and_swap_field : t -> int -> t -> t -> bool
   = "caml_obj_compare_and_swap"
+external compare_and_swap_field_val : t -> int -> t -> t -> t
+  = "caml_obj_compare_and_swap_val"
 let double_field x i = Array.get (obj x : float array) i
 let set_double_field x i v = Array.set (obj x : float array) i v
 external is_shared : t -> bool = "caml_obj_is_shared"

@@ -110,6 +110,13 @@ CAMLprim value caml_obj_compare_and_swap (value v, value f, value oldv, value ne
   return Val_int(res);
 }
 
+CAMLprim value caml_obj_compare_and_swap_val (value v, value f, value oldv, value newv)
+{
+  value out = caml_atomic_cas_field_val(v, Int_val(f), oldv, newv);
+  caml_check_urgent_gc(Val_unit);
+  return out;
+}
+
 /* caml_promote_to(obj, upto) promotes obj to be as least as shared as upto */
 CAMLprim value caml_obj_promote_to (value obj, value upto)
 {
