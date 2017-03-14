@@ -99,26 +99,31 @@ CAMLexport int caml_atomic_cas_field (value obj, int field, value oldval, value 
 
 CAMLexport value caml_atomic_cas_field_val (value obj, int field, value oldval, value newval)
 {
+  CAMLparam0 ();
+  CAMLlocal2 (out, found);
   value* p = &Op_val(obj)[field];
-  value out;
+
   if (Is_young(obj)) {
     /* non-atomic CAS since only this thread can access the object */
     out = *p;
     if (*p == oldval) {
       *p = newval;
-      write_barrier(obj, field, newval);
-      return out;
-    } else {
-      return out;
+      write_barrier(obj, field, oldval, newval);
     }
   } else {
-    /* need a real CAS */
-    out = __sync_val_compare_and_swap(p, oldval, newval);
-    if(out == oldval)
-      write_barrier(obj, field, newval);
-
-    return out;
+      while (true) {
+        /* need a real CAS */
+        out = __sync_val_compare_and_swap(p, oldval, newval);
+        if (out == oldval)
+          write_barrier(obj, field, oldval, newval);
+        else {
+          if (!Is_foreign (out)) break;
+          caml_read_barrier (obj, field);
+        }
+      }
   }
+
+  CAMLreturn(out);
 }
 
 CAMLexport void caml_set_fields (value obj, value v)
