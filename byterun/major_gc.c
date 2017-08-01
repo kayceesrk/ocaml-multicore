@@ -22,8 +22,6 @@
 */
 #define MARK_STACK_SIZE (1 << 14)
 
-typedef enum { Phase_idle, Phase_marking } gc_phase_t;
-
 uintnat caml_percent_free = Percent_free_def;
 
 static uintnat default_slice_budget() {
@@ -339,8 +337,6 @@ void caml_empty_mark_stack () {
 void caml_finish_marking () {
   //caml_gc_log ("caml_finish_marking(0)");
   caml_save_stack_gc();
-  caml_do_local_roots(&caml_darken, 0, caml_domain_self());
-  caml_scan_global_roots(&caml_darken, 0);
   caml_empty_mark_stack();
   Caml_state->stat_major_words += Caml_state->allocated_words;
   Caml_state->allocated_words = 0;
@@ -356,20 +352,6 @@ void caml_empty_mark_stack_domain (struct domain* domain)
     state->mark_stack_count = state->mark_stack_count - 1;
     mark (state->mark_stack[state->mark_stack_count], 10000000);
   }
-}
-
-void caml_finish_marking_domain (struct domain* domain) {
-  caml_domain_state* domain_state = Caml_state;
-  //caml_gc_log("caml_finish_marking_domain(0): domain=%d", domain->id);
-  caml_save_stack_gc();
-  caml_do_local_roots(&caml_darken, 0, domain);
-  caml_empty_mark_stack_domain(domain);
-  /* Previous step might have pushed values into our mark stack. Hence,
-   * empty our mark stack */
-  caml_empty_mark_stack();
-  domain_state->allocated_words = 0;
-  caml_restore_stack_gc();
-  //caml_gc_log("caml_finish_marking_domain(1): domain=%d", domain->id);
 }
 
 static struct pool** pools_to_rescan;

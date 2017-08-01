@@ -4,6 +4,7 @@
 #include "caml/misc.h"
 #include "caml/fail.h"
 #include "caml/memory.h"
+#include "caml/major_gc.h"
 #include "caml/shared_heap.h"
 #include "caml/domain.h"
 #include "caml/addrmap.h"
@@ -31,7 +32,9 @@ static void write_barrier(value obj, int field, value old_val, value new_val)
         /* Add to remembered set */
         Ref_table_add(&domain_state->remembered_set->major_ref, Op_val(obj) + field);
       } else {
-        caml_darken(0, new_val, 0);
+        caml_darken(0, old_val, 0);
+        if (domain_state->gc_phase == Phase_idle)
+          caml_darken(0, new_val, 0);
       }
     } else if (Is_young(new_val) && new_val < obj) {
       /* Both obj and new_val are young and new_val is more recent than obj.
