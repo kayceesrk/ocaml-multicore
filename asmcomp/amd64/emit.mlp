@@ -1089,7 +1089,7 @@ let fundecl fundecl =
   let { max_stack_size; contains_nontail_calls; contains_external_calls = _ } =
     preproc_fun fundecl.fun_body fundecl.fun_name in
   let handle_overflow = ref None in
-  if contains_nontail_calls || max_stack_size >= stack_threshold_size then begin
+  if true || contains_nontail_calls || max_stack_size >= stack_threshold_size then begin
     let (overflow,ret) = new_label(), new_label() in
     let threshold_offset = Domainstate.stack_ctx_words * 8 + stack_threshold_size in
     I.lea (mem64 NONE (-(max_stack_size + threshold_offset)) RSP) r10;
