@@ -191,7 +191,7 @@ typedef uint64_t uintnat;
 #endif
 
 /* Minimum free size of stack (bytes); below that, it is reallocated. */
-#define Stack_threshold_words 16
+#define Stack_threshold_words 32
 #define Stack_threshold (Stack_threshold_words * sizeof(value))
 
 /* Number of words used in the control structure at the start of a stack
